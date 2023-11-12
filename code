@@ -1,0 +1,227 @@
+import tensorflow as tf
+
+!pip install transformers
+!pip install datasets
+!pip install ffmpeg
+!pip install --quiet git+https://github.com/huggingface/transformers.git
+!pip install git+https://github.com/suno-ai/bark.git
+!pip install nltk
+
+!pip install -U stable-ts
+!pip install -U git+https://github.com/jianfch/stable-ts.git
+!pip install argostranslate
+!pip install argostranslategui
+
+import scipy
+import os
+from transformers import AutoProcessor, BarkModel
+import torch
+import nltk
+import numpy as np
+import json
+import argparse
+import time
+import stable_whisper
+import argostranslate.package
+import argostranslate.translate
+import json
+import csv
+
+nltk.download('punkt')
+
+languages = {}
+ind = 0
+with open('dataset_.csv.csv') as file_obj:
+    heading = next(file_obj)
+    reader_obj = csv.reader(file_obj)
+    language = 'en'
+    for row in reader_obj:
+
+      match row[0]:
+            case "Немецкий":
+                    language = 'de'
+            case "Английский":
+                    language = 'en'
+            case "Французский":
+                    language = 'fr'
+            case "Итальянский":
+                    language = 'it'
+            case "Испанский":
+                    language = 'es'
+            case "Японский":
+                    language = 'ja'
+            case "Китайский":
+                    language = 'zh'
+            case "Португальский":
+                    language = 'pt'
+            case "Чешский":
+                    language = 'pl'
+            case "Датский":
+                    language = 'de'
+            case "Польский":
+                    language = 'pl'
+            case "Турецкий":
+                    language = 'tr'
+      languages[ind] = language
+      ind += 1
+
+
+modelBark = BarkModel.from_pretrained("suno/bark-small")
+device = "cuda:0" if torch.cuda.is_available() else "cpu"
+modelBark = modelBark.to(device)
+sampling_rate = modelBark.generation_config.sample_rate
+processor = AutoProcessor.from_pretrained("suno/bark")
+voice_preset = 'v2/en_speaker_0'
+
+for number in range(55,56,1):
+
+  language = languages[number]
+
+  VIDEO_PATH = str(number) + ".mp4"
+  OUT_PATH = "translated/" + str(number) + "Translated.mp4"
+  JSON_PATH = "createJson/audio" + str(number) + ".json"
+  TEXT_PATH = "translatedText/" + str(number) + ".txt"
+
+  model = stable_whisper.load_model('base')
+  result = model.transcribe(VIDEO_PATH)
+  result.to_srt_vtt('audio.srt')
+  result.save_as_json(JSON_PATH)
+
+  with open(JSON_PATH, 'r', encoding='utf-8') as f:
+    templates = json.load(f)
+    for i in (templates["segments"]):
+      resText = i["text"]
+
+      from_code = "ru"
+      to_code = "en"
+
+      argostranslate.package.update_package_index()
+      available_packages = argostranslate.package.get_available_packages()
+      package_to_install = next(
+        filter(
+          lambda x: x.from_code == from_code and x.to_code == to_code, available_packages
+            )
+        )
+      argostranslate.package.install_from_path(package_to_install.download())
+      translatedTextEn = argostranslate.translate.translate(resText, from_code, to_code)
+      i["text"] = translatedTextEn
+
+  with open(JSON_PATH, 'w', encoding='utf-8') as json_file:
+    json.dump(templates, json_file)
+  strNew = ''
+  with open(JSON_PATH, 'r', encoding='utf-8') as f:
+    templates = json.load(f)
+    for i in (templates["segments"]):
+      resText = i["text"]
+
+      templates["language"] = language
+
+      from_code = "en"
+      # задается в начале
+      to_code = language
+
+      argostranslate.package.update_package_index()
+      available_packages = argostranslate.package.get_available_packages()
+      package_to_install = next(
+          filter(
+              lambda x: x.from_code == from_code and x.to_code == to_code, available_packages
+          )
+      )
+      argostranslate.package.install_from_path(package_to_install.download())
+      translatedText = argostranslate.translate.translate(resText, from_code, to_code)
+      i["text"] = translatedText
+  with open(JSON_PATH, 'w', encoding='utf-8') as json_file:
+    json.dump(templates, json_file)
+
+  with open(JSON_PATH, 'r', encoding='utf-8') as f:
+    templates = json.load(f)
+    for i in (templates["segments"]):
+      strNew += i["text"]
+  text_file = open(TEXT_PATH, "w")
+  n = text_file.write(strNew)
+  text_file.close()
+
+  countId = 1
+
+  audioMixCommand = "ffmpeg -y -i " + VIDEO_PATH
+  audioMixDelay = " -filter_complex \""
+
+  with open(JSON_PATH) as f:
+    templates = json.load(f)
+
+  targetLanguage = templates["language"]
+  match targetLanguage:
+    case "de":
+            voice_preset = 'v2/de_speaker_0'
+    case "en":
+            voice_preset = 'v2/en_speaker_0'
+    case "fr":
+            voice_preset = 'v2/fr_speaker_1'
+    case "it":
+            voice_preset = 'v2/it_speaker_0'
+    case "es":
+            voice_preset = 'v2/es_speaker_0'
+    case "ru":
+            voice_preset = 'v2/ru_speaker_0'
+    case "ja":
+            voice_preset = 'v2/ja_speaker_0'
+    case "zh":
+            voice_preset = 'v2/zh_speaker_0'
+    case "pt":
+            voice_preset = 'v2/pt_speaker_0'
+    case "pl":
+            voice_preset = 'v2/pl_speaker_0'
+    case "tr":
+            voice_preset = 'v2/tr_speaker_0'
+
+  count = 1;
+
+  for current in templates['segments']:
+    startTime = current["start"]
+    endTime = current["end"]
+    translatedText = current["text"]
+
+    text_prompt = translatedText;
+
+    script = translatedText.replace("\n", ". ").strip()
+    sentences = nltk.sent_tokenize(script)
+    silence = np.zeros(int(0.25 * sampling_rate))
+
+    pieces = []
+    for sentence in sentences:
+        inputs = processor(sentence, voice_preset=voice_preset)
+        audio_array = modelBark.generate(**inputs.to(device)).cpu().numpy().squeeze()
+        pieces += [audio_array, silence.copy()]
+        print(sentence)
+
+    filenameWav = "translatedAudio" + str(count) + ".wav"
+    filename = "translatedAudio" + str(count) + ".mp3"
+
+    scipy.io.wavfile.write(filenameWav, rate=sampling_rate, data=np.concatenate(pieces))
+
+    command = "ffmpeg -i " + filenameWav + " " + filename
+    os.system(command)
+
+    audioMixCommand += " -i " + filename
+    audioMixDelay += "[" + str(count) + "]adelay=" + str(startTime * 1000) + "[s" + str(count) + "];"
+
+    count += 1
+
+  for k in range(1,count,1):
+    audioMixDelay += "[s" + str(k) + "]"
+
+  audioMixDelay += "amix=" + str(count - 1) + "[a]\" -map 0:v -map \"[a]\" -preset ultrafast " + OUT_PATH
+
+  command = audioMixCommand + audioMixDelay
+
+  print(command)
+
+  os.system(command)
+
+  for k in range(1,count,1):
+    filenameBase = "translatedAudio" + str(count)
+    # os.remove(filenameBase + ".wav")
+    # os.remove(filenameBase + ".mp3")
+
+  os.remove(VIDEO_PATH)
+  print(str(number) + "th video completed")
